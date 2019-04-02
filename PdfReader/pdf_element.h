@@ -29,6 +29,9 @@ struct PdfXRefDictionary
 		strIndex.clear();
 		r = '\0';
 	}
+	bool empty() {
+		return (strObj.empty() || strIndex.empty());
+	}
 };
 
 struct PdfXRefTrailer
@@ -90,7 +93,13 @@ struct PdfXRefTable
 	vector<PdfXRefEntry> vecEntries;
 
 	PdfXRefTable(){ reset(); }
-	void reset(){ vecEntries.clear(); }
+	void reset() { 
+		xrefOffset = 0;
+		vecEntries.clear(); 
+	}
+	bool empty() {
+		return vecEntries.empty();
+	}
 };
 
 struct PdfXRef

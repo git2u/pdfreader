@@ -16,13 +16,14 @@ private:
 	bool isValidFileHeader(FILE* fp);
 	bool isValidFileTrailer(FILE* fp);
 	bool parseEncryptObject(FILE* fp);
-	bool parseXRef(FILE* fp, long offset);
-	bool parseXRefTrailer(FILE* fp, long offset, PdfXRefTrailer& xrefTrailer);
-	int  parseXRefTable(FILE* fp, long offset, PdfXRefTable& xrefTable);
+	bool parseXRef(FILE* fp, long& nextOffset);
+	bool parseXRefTrailer(FILE* fp, long trailerOffset, PdfXRefTrailer& xrefTrailer);
+	int  parseXRefTable(FILE* fp, long xrefOffset, PdfXRefTable& xrefTable);
 	PDF_TOKEN nextToken(FILE* fp, PdfToken& token);
+	void printXRefTrailer(PdfXRefTable& pdfXRefTable, PdfXRefTrailer& xrefTrailer) const ;
+	long findEncryptObjectOffset(PdfXRefTable& pdfXRefTable, PdfXRefTrailer& xrefTrailer) const;
 private:
 	long m_nXRefOff;
-	bool m_fPrev;
 	int m_nFileSize;
 	int m_nMajor;
 	int m_nMinor;

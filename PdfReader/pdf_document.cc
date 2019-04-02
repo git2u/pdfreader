@@ -125,14 +125,13 @@ bool PdfDocument::isValidFileTrailer(FILE* fp)
 	int nStartXrefOffset = pdfParseInt(fp);
 	if (this->m_nFileSize < nStartXrefOffset)
 		return false;
-	printf("xref offset = %d\n", nStartXrefOffset);
 	this->m_nXRefOff = nStartXrefOffset;
 	return true;
 }
 
-int PdfDocument::parseXRefTable(FILE* fp, long offset, PdfXRefTable& pdfXRefTable)
+int PdfDocument::parseXRefTable(FILE* fp, long xrefOffset, PdfXRefTable& pdfXRefTable)
 {
-	fseek(fp, offset, SEEK_SET);
+	fseek(fp, xrefOffset, SEEK_SET);
 	PdfToken token;
 	PDF_TOKEN type = PDF_TOKEN_NONE;
 	int nres = 0;
@@ -142,6 +141,7 @@ int PdfDocument::parseXRefTable(FILE* fp, long offset, PdfXRefTable& pdfXRefTabl
 	int nXrefIndex = 0;
 	int nXrefCount = 0;
 
+	pdfXRefTable.xrefOffset = xrefOffset;
 	PdfXRefEntry pdfXRefEntry;
 	PdfXRefItem pdfXRefItem;
 
@@ -450,25 +450,17 @@ PDF_TOKEN PdfDocument::nextToken(FILE* fp, PdfToken& token)
 
 bool PdfDocument::parseEncryptObject(FILE* fp)
 {
+	long nextXRefOffset = this->m_nXRefOff;
 	do {
-		this->m_fPrev = false;
-		if (!this->parseXRef(fp, this->m_nXRefOff))
+		if (!this->parseXRef(fp, nextXRefOffset))
 			break;
-	} while (this->m_fPrev);
+	} while (nextXRefOffset != 0);
 	return true;
 }
 
-bool PdfDocument::parseXRef(FILE* fp, long offset)
+void PdfDocument::printXRefTrailer(PdfXRefTable& xrefTable, PdfXRefTrailer& xrefTrailer) const
 {
-	if (offset == 0)
-		return false;
-	PdfXRefTable xrefTable;
-	PdfXRefTrailer xrefTrailer;
-	int nFileTrailerOff = this->parseXRefTable(fp, offset, xrefTable);
-	if (0 == nFileTrailerOff)
-		return false;
-	if (!this->parseXRefTrailer(fp, nFileTrailerOff, xrefTrailer))
-		return false;
+	printf("xref offset = %d\n", xrefTable.xrefOffset);
 	printf("Size: %d\n", xrefTrailer.size);
 	printf("Prev: %d\n", xrefTrailer.prev);
 	printf("Root: %s %s %c\n", xrefTrailer.root.strObj.c_str(), xrefTrailer.root.strIndex.c_str(), xrefTrailer.root.r);
@@ -476,14 +468,58 @@ bool PdfDocument::parseXRef(FILE* fp, long offset)
 	printf("Encrypt: %s %s %c\n", xrefTrailer.encrypt.strObj.c_str(), xrefTrailer.encrypt.strIndex.c_str(), xrefTrailer.encrypt.r);
 	printf("Info:%s %s %c\n", xrefTrailer.info.strObj.c_str(), xrefTrailer.info.strIndex.c_str(), xrefTrailer.info.r);
 	printf("XRefStm: %d\n", xrefTrailer.xrefstm);
+}
+
+long PdfDocument::findEncryptObjectOffset(PdfXRefTable& xrefTable, PdfXRefTrailer& xrefTrailer) const
+{
+	int obj = atoi(xrefTrailer.encrypt.strObj.c_str());
+	auto begiter = xrefTable.vecEntries.begin();
+	auto enditer = xrefTable.vecEntries.end();
+	int index = 0;
+	for (; begiter != enditer; ++begiter) {
+		if (begiter->count < 1)
+			continue;
+		if (begiter->index <= obj && obj < (begiter->count + begiter->index )) {
+			index = obj - begiter->index;
+			PdfXRefItem& item = begiter->entries[index];
+			int x = 0;
+		}
+	}
+	return 0;
+}
+
+bool PdfDocument::parseXRef(FILE* fp, long& nextOffset)
+{
+	long offset = nextOffset;
+	nextOffset = 0;
+	if (0 == offset) {
+		return false;
+	}
+
+	PdfXRefTable xrefTable;
+	PdfXRefTrailer xrefTrailer;
+	int trailerOffset = this->parseXRefTable(fp, offset, xrefTable);
+	if (0 == trailerOffset)
+		return false;
+	if (!this->parseXRefTrailer(fp, trailerOffset, xrefTrailer))
+		return false;
+	nextOffset = xrefTrailer.prev;
+	this->printXRefTrailer(xrefTable, xrefTrailer);
+
+	if (!xrefTrailer.encrypt.empty() && !xrefTable.empty()) {
+		long encryptObjOffset = this->findEncryptObjectOffset(xrefTable, xrefTrailer);
+		if (0 != encryptObjOffset) {
+			printf("find encrypt obj offset!\n");
+		}
+	}
 	return true;
 }
 
-bool PdfDocument::parseXRefTrailer(FILE* fp, long offset, PdfXRefTrailer& xrefTrailer)
+bool PdfDocument::parseXRefTrailer(FILE* fp, long trailerOffset, PdfXRefTrailer& xrefTrailer)
 {
-	if (offset == 0)
+	if (trailerOffset == 0)
 		return false;
-	fseek(fp, offset, SEEK_SET);
+	fseek(fp, trailerOffset, SEEK_SET);
 	PdfToken token;
 	PDF_TOKEN type = PDF_TOKEN_NONE;
 	std::vector<int> stackObject;
@@ -590,7 +626,6 @@ bool PdfDocument::parseXRefTrailer(FILE* fp, long offset, PdfXRefTrailer& xrefTr
 				else if (internalState == 2) {
 					xrefTrailer.root.strIndex = token.s;
 				}
-				int size = atoi(token.s.c_str());
 			}
 			else if (PDF_TOKEN_IDENTIFIER == type) {
 				if (token.s == "R") {
@@ -644,9 +679,6 @@ bool PdfDocument::parseXRefTrailer(FILE* fp, long offset, PdfXRefTrailer& xrefTr
 			else if (PDF_TOKEN_NUM == type) {
 				state = 6;
 				xrefTrailer.prev = atoi(token.s.c_str());
-				int size = atoi(token.s.c_str());
-				this->m_fPrev = true;
-				this->m_nXRefOff = size;
 			}
 			else {
 				state = 0;
@@ -658,11 +690,18 @@ bool PdfDocument::parseXRefTrailer(FILE* fp, long offset, PdfXRefTrailer& xrefTr
 				state = 7;
 			else if (PDF_TOKEN_NUM == type) {
 				state = 7;
-				int size = atoi(token.s.c_str());
+				internalState++;
+				if (1 == internalState) {
+					xrefTrailer.encrypt.strObj = token.s;
+				}
+				else if (2 == internalState) {
+					xrefTrailer.encrypt.strIndex = token.s;
+				}
 			}
 			else if (PDF_TOKEN_IDENTIFIER == type) {
 				if (token.s == "R") {
 					state = 0;
+					xrefTrailer.encrypt.r = 'R';
 				}
 			}
 			else {
@@ -682,7 +721,6 @@ bool PdfDocument::parseXRefTrailer(FILE* fp, long offset, PdfXRefTrailer& xrefTr
 				else if (internalState == 2) {
 					xrefTrailer.info.strIndex = token.s;
 				}
-				int size = atoi(token.s.c_str());
 			}
 			else if (PDF_TOKEN_IDENTIFIER == type) {
 				if (token.s == "R") {
